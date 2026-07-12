@@ -8,7 +8,7 @@ Guest Browser (PWA)
   │ WebRTC (LiveKit)
   ▼
 voice-orchestration/ (Pipecat CPU pipeline)
-  ├── Deepgram STT ───────────────────────────┐
+  ├── Deepgram STT (model unpinned — default) ┐
   ├── Fireworks AI LLM (gpt-oss-120b) ─────────┤  managed cloud APIs
   └── Deepgram TTS (Aura) ─────────────────────┘
   │

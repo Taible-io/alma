@@ -187,7 +187,9 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         ),
     )
 
-    # STT: Deepgram Nova-2 (streaming)
+    # STT: Deepgram (streaming). No model is pinned here, so this uses the
+    # Deepgram/Pipecat default model. Pass live_options=LiveOptions(model=...)
+    # to pin a specific one (e.g. "nova-3").
     stt = DeepgramSTTService(
         api_key=DEEPGRAM_API_KEY,
     )
