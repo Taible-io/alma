@@ -9,6 +9,7 @@ Diagrams are [D2](https://d2lang.com) source, versioned in git. CI renders them 
 A restaurant **voice agent**. A diner scans a QR at the table, talks to the agent in the browser over WebRTC, and a **self-hosted AMD GPU (ROCm)** pipeline does speech→LLM→speech. The LLM calls our MCP tools to read the menu and place orders.
 
 **Canonical diagram:** [`diagrams/container/voice-agent.d2`](./diagrams/container/voice-agent.d2)
+**Engineering-level detail:** [`TECHNICAL.md`](./TECHNICAL.md) — components, data flow, tool/MCP contracts, env config, and the current cloud-vs-GPU design drift.
 
 ```
 QR → PWA (WebRTC) → Pipecat/LiveKit (CPU)
