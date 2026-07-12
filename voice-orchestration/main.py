@@ -51,6 +51,9 @@ LIVEKIT_API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 DEEPGRAM_API_KEY = os.environ["DEEPGRAM_API_KEY"]
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "")
+FIREWORKS_API_KEY = os.environ["FIREWORKS_API_KEY"]
+FIREWORKS_BASE_URL = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
+FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8080")
 RESTAURANT_SLUG = os.environ.get("RESTAURANT_SLUG", "taible-bistro")
 
@@ -242,12 +245,12 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         api_key=DEEPGRAM_API_KEY,
     )
 
-    # LLM: AMD ROCm vLLM (Qwen2.5-7B-Instruct) via OpenAI API standard
+    # LLM: Fireworks AI (gpt-oss-120b) via OpenAI-compatible API
     from pipecat.services.openai.llm import OpenAILLMService
     llm = OpenAILLMService(
-        api_key="EMPTY", # vLLM doesn't require an API key
-        model="Qwen/Qwen2.5-7B-Instruct",
-        base_url=f"{VLLM_BASE_URL}/v1",
+        api_key=FIREWORKS_API_KEY,
+        model=FIREWORKS_MODEL,
+        base_url=FIREWORKS_BASE_URL,
     )
 
     # TTS: Deepgram Aura
@@ -353,7 +356,7 @@ async def create_pipeline(room_name: str) -> PipelineTask:
             transport.input(),               # WebRTC audio in
             stt,                              # Deepgram STT
             context_aggregator.user(),        # Accumulate user speech turn
-            llm,                              # Groq LLM
+            llm,                              # Fireworks LLM (gpt-oss-120b)
             text_capture,                     # Write agent text to messages.json
             tts,                              # Deepgram TTS
             transport.output(),               # WebRTC audio out
