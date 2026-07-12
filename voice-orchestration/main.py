@@ -171,6 +171,7 @@ async def create_pipeline(room_name: str) -> PipelineTask:
     from pipecat.services.openai.llm import OpenAILLMService
     from pipecat.services.deepgram.stt import DeepgramSTTService
     from pipecat.services.deepgram.tts import DeepgramTTSService
+    from deepgram import LiveOptions
 
     token = generate_livekit_token(room_name)
 
@@ -187,9 +188,14 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         ),
     )
 
-    # STT: Deepgram Nova-2 (streaming)
+    # STT: Deepgram Nova-2 (streaming), pinned explicitly.
     stt = DeepgramSTTService(
         api_key=DEEPGRAM_API_KEY,
+        live_options=LiveOptions(
+            model="nova-2",
+            language="en-US",
+            smart_format=True,
+        ),
     )
 
     # LLM: Fireworks AI (gpt-oss-120b) via OpenAI-compatible API

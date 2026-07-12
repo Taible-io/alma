@@ -18,7 +18,7 @@ Browser WebRTC mic
 | Stage       | Service                                                     |
 | ----------- | ---------------------------------------------------------- |
 | Transport   | LiveKit (WebRTC)                                            |
-| STT         | Deepgram                                                    |
+| STT         | Deepgram — **`nova-2`** (pinned via `LiveOptions`, `en-US`, smart formatting) |
 | **LLM**     | **Fireworks AI — `accounts/fireworks/models/gpt-oss-120b`** (OpenAI-compatible API) |
 | TTS         | Deepgram Aura (`aura-asteria-en`)                          |
 | Tools       | Remote MCP server, adopted by the LLM via a single Pipecat `MCPClient` |

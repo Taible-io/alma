@@ -1,5 +1,5 @@
 # Taible — AI Voice Ordering System
-> AMD ROCm-powered restaurant voice ordering with Pipecat, vLLM, Whisper, Kokoro, and FastMCP
+> Cloud restaurant voice ordering with Pipecat, LiveKit, Deepgram, Fireworks AI (gpt-oss-120b), and FastMCP.
 
 ## Architecture
 
@@ -8,13 +8,13 @@ Guest Browser (PWA)
   │ WebRTC (LiveKit)
   ▼
 voice-orchestration/ (Pipecat CPU pipeline)
-  ├── Whisper STT ──────────────────────────┐
-  ├── vLLM Qwen2.5-7B ────────────────────┤  gpu-rocm/ (AMD ROCm)
-  └── Kokoro TTS ──────────────────────────┘
+  ├── Deepgram STT (nova-2) ──────────────────┐
+  ├── Fireworks AI LLM (gpt-oss-120b) ─────────┤  managed cloud APIs
+  └── Deepgram TTS (Aura) ─────────────────────┘
   │
-  │ HTTP tool calls
+  │ MCP tool calls (streamable HTTP)
   ▼
-mcp-server/ (FastMCP — Python)
+mcp-server/ (FastMCP — Python, Cloud Run)
   │ Supabase service-role key
   ▼
 Supabase (PostgreSQL + Realtime)
@@ -23,14 +23,19 @@ Supabase (PostgreSQL + Realtime)
 taible/ (Next.js Staff Dashboard)
 ```
 
+> **Note on the GPU stack:** Taible was originally designed to run STT/LLM/TTS on a
+> self-hosted **AMD ROCm** GPU (Whisper + vLLM/Qwen + Kokoro). That path is now
+> **legacy** — the running system uses managed cloud APIs (Deepgram + Fireworks). The
+> old GPU code still lives in `gpu-rocm/` but is not used by the agent.
+
 ## Repositories
 
 | Folder | Purpose |
 |--------|---------|
 | `taible/` | Guest PWA + Staff Dashboard (Next.js 15) |
-| `voice-orchestration/` | Pipecat CPU pipeline — WebRTC ↔ GPU glue |
-| `gpu-rocm/` | AMD ROCm Docker stack (vLLM, Whisper, Kokoro) |
-| `mcp-server/` | FastMCP tool server (get_menu, create_order, …) |
+| `voice-orchestration/` | Pipecat CPU pipeline — WebRTC ↔ cloud STT/LLM/TTS glue |
+| `mcp-server/` | FastMCP tool server (get_menu, create_order, …) over Supabase |
+| `gpu-rocm/` | **Legacy** AMD ROCm Docker stack (vLLM, Whisper, Kokoro) — not used by the current pipeline |
 | `architecture/` | C4 D2-as-code diagrams |
 
 ---
@@ -54,47 +59,36 @@ cp .env.example .env
 
 pip install -r requirements.txt
 python server.py
-# → Listening on http://localhost:8080
+# → FastMCP (streamable HTTP) listening on http://localhost:8080/mcp
 ```
 
-Test it:
-```bash
-curl -X POST http://localhost:8080/tools/get_menu \
-  -H "Content-Type: application/json" \
-  -d '{"restaurant_slug": "taible-bistro"}'
-```
-
-### 3. AMD ROCm GPU Pipeline
-
-> Requires an AMD GPU server with ROCm 6.x and Docker installed.
+The server speaks the **MCP protocol** (streamable HTTP / JSON-RPC) at `/mcp` — it does
+**not** expose per-tool REST routes. Inspect its tools with any MCP client, e.g.:
 
 ```bash
-cd gpu-rocm
-docker compose up -d
-# Starts: vLLM (:8000), Whisper (:8178), Kokoro (:8880)
-
-# Verify
-curl http://amd-gpu-server:8000/health
-curl http://amd-gpu-server:8178/health
-curl http://amd-gpu-server:8880/health
+npx @modelcontextprotocol/inspector   # then point it at http://localhost:8080/mcp
 ```
 
-### 4. Voice Orchestration (Pipecat)
+### 3. Voice Orchestration (Pipecat)
 
 You need a **LiveKit** server. Use [LiveKit Cloud](https://livekit.io) (free tier) or self-host.
+You also need **Deepgram** and **Fireworks AI** API keys.
 
 ```bash
 cd voice-orchestration
 cp .env.example .env
-# Edit .env: fill LIVEKIT_*, VLLM_BASE_URL, WHISPER_BASE_URL,
-#            KOKORO_BASE_URL, MCP_SERVER_URL
+# Edit .env: fill LIVEKIT_*, DEEPGRAM_API_KEY, FIREWORKS_API_KEY, MCP_SERVER_URL
 
 pip install -r requirements.txt
 python main.py
 # → Pipecat agent connected to LiveKit room "taible-demo"
 ```
 
-### 5. Frontend (Next.js)
+The LLM adopts its tools directly from the MCP server: a single Pipecat `MCPClient`
+connects to `MCP_SERVER_URL`, discovers the tools via `tools/list`, and registers them
+on the Fireworks LLM.
+
+### 4. Frontend (Next.js)
 
 ```bash
 cd taible
@@ -136,11 +130,11 @@ npm run dev
 | `LIVEKIT_URL` | `wss://your.livekit.cloud` |
 | `LIVEKIT_API_KEY` | LiveKit API key |
 | `LIVEKIT_API_SECRET` | LiveKit API secret |
-| `VLLM_BASE_URL` | `http://amd-gpu-server:8000/v1` |
-| `VLLM_MODEL` | `Qwen/Qwen2.5-7B-Instruct` |
-| `WHISPER_BASE_URL` | `http://amd-gpu-server:8178` |
-| `KOKORO_BASE_URL` | `http://amd-gpu-server:8880` |
-| `MCP_SERVER_URL` | `https://your-mcp-server.fly.dev` |
+| `DEEPGRAM_API_KEY` | Deepgram key (STT + TTS) |
+| `FIREWORKS_API_KEY` | Fireworks AI key (LLM) |
+| `FIREWORKS_BASE_URL` | default `https://api.fireworks.ai/inference/v1` |
+| `FIREWORKS_MODEL` | default `accounts/fireworks/models/gpt-oss-120b` |
+| `MCP_SERVER_URL` | MCP streamable-HTTP endpoint (`…/mcp`) |
 | `RESTAURANT_SLUG` | `taible-bistro` |
 | `LIVEKIT_ROOM` | `taible-demo` |
 
