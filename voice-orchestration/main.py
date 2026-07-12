@@ -1,18 +1,24 @@
 """
-Taible Voice Orchestration — Cloud pipeline (Groq + Deepgram).
+Taible Voice Orchestration — Cloud pipeline (Deepgram + Fireworks).
 
 Flow:
-  Browser WebRTC mic → Groq Whisper STT → Groq Llama 3 LLM
-    → [tool calls → FastMCP server]
+  Browser WebRTC mic → Deepgram STT → Fireworks LLM (gpt-oss-120b)
+    → [tool calls → MCP server, streamable HTTP]
     → Deepgram TTS → Browser WebRTC speaker
+
+The LLM adopts its tools directly from the remote MCP server: a single
+Pipecat MCPClient connects to MCP_SERVER_URL, discovers the tools via
+`tools/list`, and registers them on the LLM.
 
 Environment variables:
   LIVEKIT_URL           — LiveKit server WebSocket URL
   LIVEKIT_API_KEY       — LiveKit API key
   LIVEKIT_API_SECRET    — LiveKit API secret
-  GROQ_API_KEY          — Groq API key (STT + LLM)
-  DEEPGRAM_API_KEY      — Deepgram API key (TTS)
-  MCP_SERVER_URL        — FastMCP URL (http://localhost:8080)
+  DEEPGRAM_API_KEY      — Deepgram API key (STT + TTS)
+  FIREWORKS_API_KEY     — Fireworks AI API key (LLM)
+  FIREWORKS_BASE_URL    — Fireworks endpoint (default api.fireworks.ai/inference/v1)
+  FIREWORKS_MODEL       — Fireworks model id (default gpt-oss-120b)
+  MCP_SERVER_URL        — MCP server streamable-HTTP endpoint (…/mcp)
   RESTAURANT_SLUG       — restaurant slug
 """
 
@@ -20,7 +26,6 @@ import asyncio
 import os
 import json
 import time
-import httpx
 from pipecat.frames.frames import TextFrame
 from dotenv import load_dotenv
 
@@ -41,20 +46,22 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 
 # ── Environment ──────────────────────────────────────────────────────────
 LIVEKIT_URL = os.environ["LIVEKIT_URL"]
 LIVEKIT_API_KEY = os.environ["LIVEKIT_API_KEY"]
 LIVEKIT_API_SECRET = os.environ["LIVEKIT_API_SECRET"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 DEEPGRAM_API_KEY = os.environ["DEEPGRAM_API_KEY"]
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "")
 FIREWORKS_API_KEY = os.environ["FIREWORKS_API_KEY"]
 FIREWORKS_BASE_URL = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
 FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8080")
+# Single MCP server — streamable-HTTP / JSON-RPC endpoint (".../mcp"); the LLM
+# adopts its tools from here. No auth required.
+MCP_SERVER_URL = os.environ.get(
+    "MCP_SERVER_URL",
+    "https://mcp-server-git-285659212975.southamerica-east1.run.app/mcp",
+)
 RESTAURANT_SLUG = os.environ.get("RESTAURANT_SLUG", "taible-bistro")
 
 # ── System Prompt ────────────────────────────────────────────────────────
@@ -125,66 +132,6 @@ class TextCapture(FrameProcessor):
                 self._buf = ""
         await self.push_frame(frame, direction)
 
-# ── MCP Tools Manifest ───────────────────────────────────────────────────
-MCP_TOOLS = [
-    FunctionSchema(
-        name="get_menu",
-        description="Returns all available menu items with prices.",
-        properties={"restaurant_slug": {"type": "string"}},
-        required=["restaurant_slug"],
-    ),
-    FunctionSchema(
-        name="start_session",
-        description="Opens a guest session. Call when conversation starts.",
-        properties={
-            "restaurant_slug": {"type": "string"},
-            "table_number": {"type": "string"},
-        },
-        required=["restaurant_slug"],
-    ),
-    FunctionSchema(
-        name="create_order",
-        description="Creates a new pending order for the session.",
-        properties={"session_id": {"type": "string"}},
-        required=["session_id"],
-    ),
-    FunctionSchema(
-        name="add_item_to_order",
-        description="Adds a menu item to an existing order. Call this silently for EACH item the customer orders.",
-        properties={
-            "order_id": {"type": "string"},
-            "menu_item_id": {"type": "string"},
-            "quantity": {"type": "integer", "default": 1},
-        },
-        required=["order_id", "menu_item_id"],
-    ),
-    # NOTE: confirm_order is intentionally removed — the customer confirms via the UI button.
-    FunctionSchema(
-        name="call_waiter",
-        description="Calls a human staff member to the table.",
-        properties={"session_id": {"type": "string"}},
-        required=["session_id"],
-    ),
-]
-
-
-# ── Tool call dispatcher ─────────────────────────────────────────────────
-async def call_mcp_tool(tool_name: str, tool_args: dict) -> str:
-    """Forward a tool call to the FastMCP server and return the JSON result."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            resp = await client.post(
-                f"{MCP_SERVER_URL}/tools/{tool_name}",
-                json=tool_args,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            return resp.text
-        except Exception as exc:
-            print(f"[MCP] ERROR: {tool_name} failed: {exc}")
-            return json.dumps({"error": str(exc)})
-
-
 # ── LiveKit token ────────────────────────────────────────────────────────
 def generate_livekit_token(room_name: str) -> str:
     try:
@@ -246,7 +193,6 @@ async def create_pipeline(room_name: str) -> PipelineTask:
     )
 
     # LLM: Fireworks AI (gpt-oss-120b) via OpenAI-compatible API
-    from pipecat.services.openai.llm import OpenAILLMService
     llm = OpenAILLMService(
         api_key=FIREWORKS_API_KEY,
         model=FIREWORKS_MODEL,
@@ -259,9 +205,18 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         voice="aura-asteria-en",
     )
 
+    # ── LLM adopts the MCP server's tools ───────────────────────────────────
+    # A single MCPClient connects to the remote MCP server over streamable HTTP
+    # (MCP_SERVER_URL, ".../mcp", no auth), discovers its tools via `tools/list`,
+    # and registers them on the Fireworks LLM. This is the only tool source.
+    from pipecat.services.mcp_service import MCPClient
+    mcp_client = MCPClient(server_params=MCP_SERVER_URL)
+    tools_schema = await mcp_client.register_tools(llm)
+    print(f"[MCP] Fireworks adopted tools from {MCP_SERVER_URL}")
+
     context = LLMContext(
         messages=[{"role": "user", "content": SYSTEM_PROMPT}],
-        tools=MCP_TOOLS,
+        tools=tools_schema,
     )
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMUserAggregatorParams,
@@ -272,82 +227,6 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         user_params=LLMUserAggregatorParams(),
         assistant_params=LLMAssistantAggregatorParams(),
     )
-
-    # In-memory mock database for the hackathon demo
-    MOCK_DB = {
-        "menu": [
-            {"id": "item_1", "name": "Taible Signature Burger", "price": 12.99, "description": "Beef patty, cheese, lettuce, house sauce"},
-            {"id": "item_2", "name": "Truffle Fries", "price": 5.99, "description": "Crispy fries with truffle oil and parmesan"},
-            {"id": "item_3", "name": "Vanilla Milkshake", "price": 4.50, "description": "Classic vanilla bean milkshake"},
-            {"id": "item_4", "name": "Flared White Coffee", "price": 3.99, "description": "Our signature flared white coffee"},
-            {"id": "item_5", "name": "Chocolate Brownie", "price": 6.50, "description": "Warm chocolate brownie with fudge"},
-            {"id": "item_6", "name": "Pan-Seared Salmon", "price": 18.99, "description": "Fresh salmon with lemon dill sauce"},
-            {"id": "item_7", "name": "Loaded Fries", "price": 7.99, "description": "Fries loaded with cheese and bacon"}
-        ],
-        "order": []
-    }
-
-    # Guard flag: add_item_to_order is BLOCKED until the customer has spoken at least once.
-    # This prevents Qwen from calling the tool during its opening greeting.
-    user_has_spoken = {"value": False}
-
-    async def mcp_handler(params):
-        tool_name = params.function_name
-        try:
-            tool_args = (
-                json.loads(params.arguments)
-                if isinstance(params.arguments, str)
-                else params.arguments
-            )
-        except Exception:
-            tool_args = {}
-
-        print(f"[MCP] CALL: {tool_name}({tool_args})")
-
-        # GUARD: Block add_item_to_order during the greeting (before user has spoken).
-        # After the greeting, context grows as user turns are added.
-        # The initial context has only 1 message (system prompt as user role).
-        # Once the customer actually speaks, context will have ≥ 3 messages.
-        if tool_name == "add_item_to_order":
-            real_user_turns = [m for m in context.messages if m.get("role") == "user" and m.get("content") != SYSTEM_PROMPT]
-            if not real_user_turns:
-                print("[MCP] BLOCKED add_item_to_order — no real user turn yet (still in greeting phase)")
-                await params.result_callback(json.dumps({"status": "ignored", "reason": "customer has not spoken yet"}))
-                return
-
-
-        # Mock implementations
-        if tool_name == "start_session":
-            MOCK_DB["order"] = []  # Reset order on new session
-            result = json.dumps({"session_id": "sess_123", "status": "started", "message": "Welcome!"})
-        elif tool_name == "get_menu":
-            result = json.dumps(MOCK_DB["menu"])
-        elif tool_name == "create_order":
-            MOCK_DB["order"] = []
-            result = json.dumps({"order_id": "ord_123", "status": "created"})
-        elif tool_name == "add_item_to_order":
-            item_id = tool_args.get("menu_item_id") or tool_args.get("item_id", "")
-            found = next((item for item in MOCK_DB["menu"] if item_id.lower() in item["id"].lower() or item_id.lower() in item["name"].lower()), None)
-            if found:
-                MOCK_DB["order"].append(found)
-                # Write item addition to the shared order file so frontend can update cart
-                order_file = os.path.join(os.path.dirname(__file__), "..", "taible", "public", "order.json")
-                try:
-                    with open(order_file, "w") as f:
-                        json.dump(MOCK_DB["order"], f)
-                except: pass
-                result = json.dumps({"status": "added", "item": found})
-            else:
-                result = json.dumps({"error": "Item not found in menu"})
-        else:
-            # confirm_order tool has been removed from AI. Any unknown tool returns ok silently.
-            result = json.dumps({"status": "ok"})
-
-        print(f"[MCP] DONE: {result[:120]}")
-        await params.result_callback(result)
-
-    for tool in MCP_TOOLS:
-        llm.register_function(tool.name, mcp_handler)
 
     text_capture = TextCapture()
 
@@ -368,6 +247,10 @@ async def create_pipeline(room_name: str) -> PipelineTask:
         pipeline,
         params=PipelineParams(allow_interruptions=True),
     )
+
+    # Keep the MCP client referenced for the pipeline's lifetime so its
+    # connection isn't garbage-collected mid-session.
+    task._mcp_client = mcp_client
 
     @transport.event_handler("on_first_participant_joined")
     async def on_joined(transport, participant):
