@@ -54,10 +54,9 @@ LIVEKIT_API_KEY = os.environ["LIVEKIT_API_KEY"]
 LIVEKIT_API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 DEEPGRAM_API_KEY = os.environ["DEEPGRAM_API_KEY"]
 FIREWORKS_API_KEY = os.environ["FIREWORKS_API_KEY"]
-FIREWORKS_BASE_URL = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
-FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
+FIREWORKS_BA
+FIREWORKS_MODESE_URL = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")L = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/gpt-oss-120b")
 # Single MCP server — streamable-HTTP / JSON-RPC endpoint (".../mcp"); the LLM
-# adopts its tools from here. No auth required.
 MCP_SERVER_URL = os.environ.get(
     "MCP_SERVER_URL",
     "https://mcp-server-git-285659212975.southamerica-east1.run.app/mcp",

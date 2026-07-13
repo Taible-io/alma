@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import type { AppMode, GuestView, CartItem, MenuItem, Order, OrderStatus } from './types'
 import { RESTAURANT_NAME, TABLE_NUMBER, MENU_ITEMS, INITIAL_ORDERS } from './data/mockData'
 import { supabase } from './lib/supabase'
+import { fetchMenu } from './lib/menu'
 
 import WelcomeScreen from './components/guest/WelcomeScreen'
 import VoiceScreen from './components/guest/VoiceScreen'
@@ -22,6 +23,16 @@ export default function App() {
   const [menuItems, setMenuItems] = useState(MENU_ITEMS)
   const [toast, setToast] = useState<{ msg: string; type?: 'success' | 'info' | 'error' } | null>(null)
   const [confirmedOrder, setConfirmedOrder] = useState<{ id: string; time: Date; total: number; items: CartItem[] } | null>(null)
+
+  // Load the live menu from Supabase (the same rows MCP's get_menu exposes).
+  // Falls back to the bundled mock data if the fetch fails.
+  useEffect(() => {
+    let active = true
+    fetchMenu().then(items => {
+      if (active && items && items.length > 0) setMenuItems(items)
+    })
+    return () => { active = false }
+  }, [])
 
   // Fetch initial orders and subscribe to real-time changes when in staff mode
   useEffect(() => {

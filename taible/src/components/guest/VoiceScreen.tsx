@@ -2,39 +2,18 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { LiveKitRoom, RoomAudioRenderer, useVoiceAssistant } from "@livekit/components-react"
 import type { OrbState, Message, CartItem } from "../../types"
+import { fetchMenu } from "../../lib/menu"
 
-// ── Fallback: parse AI text to detect ordered items ──
-const MENU_ITEMS: CartItem['menuItem'][] = [
-  { id: 'item_1', name: 'Taible Signature Burger', price: 12.99, description: 'Beef patty, cheese, lettuce', category: 'food', available: true },
-  { id: 'item_2', name: 'Truffle Fries',           price: 5.99,  description: 'Crispy fries with truffle oil', category: 'food', available: true },
-  { id: 'item_3', name: 'Vanilla Milkshake',        price: 4.50,  description: 'Classic vanilla bean milkshake', category: 'food', available: true },
-  { id: 'item_4', name: 'Flared White Coffee',       price: 3.99,  description: 'Signature white coffee', category: 'food', available: true },
-  { id: 'item_5', name: 'Chocolate Brownie',         price: 6.50,  description: 'Warm brownie with fudge', category: 'food', available: true },
-  { id: 'item_6', name: 'Pan-Seared Salmon',         price: 18.99, description: 'Salmon with lemon dill', category: 'food', available: true },
-  { id: 'item_7', name: 'Loaded Fries',              price: 7.99,  description: 'Fries with cheese and bacon', category: 'food', available: true },
-]
-
-// Keywords that map to menu items for text-based fallback detection
-const KEYWORDS: [string[], string][] = [
-  [['burger', 'signature burger'], 'item_1'],
-  [['truffle fries', 'truffle fry'], 'item_2'],
-  [['fries', 'fry'], 'item_2'],
-  [['milkshake', 'milk shake', 'vanilla shake', 'vanilla milkshake'], 'item_3'],
-  [['coffee', 'white coffee'], 'item_4'],
-  [['brownie', 'chocolate brownie'], 'item_5'],
-  [['salmon', 'pan-seared salmon'], 'item_6'],
-  [['loaded fries'], 'item_7'],
-]
-
-function parseItemsFromText(text: string): string[] {
+// Fallback: match ordered items in the assistant's text against the live menu.
+// Matches on the full item name or any distinctive (>3 char) word from it, so
+// it works for whatever items are actually on the menu — no hardcoded ids.
+function matchMenuItems(text: string, menu: CartItem['menuItem'][]): CartItem['menuItem'][] {
   const lower = text.toLowerCase()
-  const found: string[] = []
-  for (const [keywords, id] of KEYWORDS) {
-    if (keywords.some(k => lower.includes(k)) && !found.includes(id)) {
-      found.push(id)
-    }
-  }
-  return found
+  return menu.filter(item => {
+    const name = item.name.toLowerCase()
+    if (lower.includes(name)) return true
+    return name.split(/\s+/).filter(w => w.length > 3).some(w => lower.includes(w))
+  })
 }
 
 // Custom SVG Icons for a premium look
@@ -135,6 +114,8 @@ export default function VoiceScreen({ restaurantName, tableNumber, cart, onOpenC
   const transcriptRef = useRef<HTMLDivElement>(null)
   const lastTsRef = useRef(0)
   const sessionRef = useRef(false)
+  // Live menu (same rows MCP's get_menu reads), loaded from Supabase on mount.
+  const menuRef = useRef<CartItem['menuItem'][]>([])
 
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0)
   const cartTotal = cart.reduce((s, i) => s + i.menuItem.price * i.quantity, 0)
@@ -149,6 +130,8 @@ export default function VoiceScreen({ restaurantName, tableNumber, cart, onOpenC
     const nowTs = Math.floor(Date.now() / 1000)
     lastTsRef.current = nowTs
     detectedIdsRef.current = []
+    // Load the live menu from Supabase
+    fetchMenu().then(items => { menuRef.current = items ?? [] })
     // Clear backend stale data
     fetch("/api/order", { method: "DELETE" }).catch(() => {})
     fetch("/api/messages", { method: "DELETE" }).catch(() => {})
@@ -176,22 +159,17 @@ export default function VoiceScreen({ restaurantName, tableNumber, cart, onOpenC
             const lowerText = msg.text.toLowerCase()
             // ONLY parse if the AI explicitly indicates it added something
             if (lowerText.includes('add') || lowerText.includes('got it')) {
-              const detectedIds = parseItemsFromText(msg.text)
-              if (detectedIds.length > 0) {
-                const newIds = detectedIds.filter(id => !detectedIdsRef.current.includes(id))
-                if (newIds.length > 0) {
-                  detectedIdsRef.current = [...detectedIdsRef.current, ...newIds]
-                  // Push them to the backend manually since LLM tool call missed
-                  for (const id of newIds) {
-                    const menuItem = MENU_ITEMS.find(m => m.id === id)
-                    if (menuItem) {
-                      fetch("/api/order", {
-                        method: "POST",
-                        body: JSON.stringify(menuItem),
-                        headers: { "Content-Type": "application/json" }
-                      })
-                    }
-                  }
+              const detected = matchMenuItems(msg.text, menuRef.current)
+              const newItems = detected.filter(it => !detectedIdsRef.current.includes(it.id))
+              if (newItems.length > 0) {
+                detectedIdsRef.current = [...detectedIdsRef.current, ...newItems.map(it => it.id)]
+                // Push them to the backend manually since LLM tool call missed
+                for (const menuItem of newItems) {
+                  fetch("/api/order", {
+                    method: "POST",
+                    body: JSON.stringify(menuItem),
+                    headers: { "Content-Type": "application/json" }
+                  })
                 }
               }
             } // NEW CLOSING BRACE
