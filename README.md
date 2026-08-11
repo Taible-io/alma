@@ -1,7 +1,7 @@
 # Taible — AI Voice Ordering System
 > Cloud restaurant voice ordering with Pipecat, LiveKit, Deepgram, Fireworks AI (gpt-oss-120b), and FastMCP.
 ## Demo
-https://github.com/user-attachments/assets/919772c0-abeb-44a9-8264-5eff92b1d3ea
+https://github.com/user-attachments/assets/7ddceacc-8981-42ba-9df1-8ac47e1637cf
 
 ## Architecture
 
